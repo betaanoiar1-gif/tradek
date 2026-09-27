@@ -6,7 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS schema_info (
@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     genome_id     TEXT NOT NULL,
     feature_hash  TEXT NOT NULL,
     dataset_hash  TEXT,
+    dataset_source TEXT,
     config_hash   TEXT NOT NULL,
     code_version  TEXT NOT NULL,
     git_commit    TEXT,
@@ -74,10 +75,18 @@ class Memory:
         self.conn.execute("PRAGMA journal_mode=WAL;")
         self.conn.execute("PRAGMA synchronous=NORMAL;")
         self.conn.executescript(_DDL)
+        self._migrate()
         self.conn.execute(
             "INSERT OR REPLACE INTO schema_info(key,value) VALUES('schema_version',?)",
             (str(SCHEMA_VERSION),),
         )
+        self.conn.commit()
+
+    def _migrate(self) -> None:
+        """Additive migrations only; existing rows are never rewritten."""
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(experiments)")}
+        if "dataset_source" not in cols:
+            self.conn.execute("ALTER TABLE experiments ADD COLUMN dataset_source TEXT")
         self.conn.commit()
 
     # ---------------------------------------------------------------- writes
@@ -86,13 +95,13 @@ class Memory:
         self.conn.execute(
             """INSERT OR REPLACE INTO experiments VALUES
                (:experiment_id,:counter,:seed,:split,:genome_hash,:genome_id,
-                :feature_hash,:dataset_hash,:config_hash,:code_version,:git_commit,
+                :feature_hash,:dataset_hash,:dataset_source,:config_hash,:code_version,:git_commit,
                 :fitness,:fitness_accepted,:rejection_reason,:formula_version,:status,
                 :ledger_path,:genome_json,:metrics_json,:error)""",
             {
                 **{k: row.get(k) for k in (
                     "experiment_id","counter","seed","split","genome_hash","genome_id",
-                    "feature_hash","dataset_hash","config_hash","code_version",
+                    "feature_hash","dataset_hash","dataset_source","config_hash","code_version",
                     "git_commit","fitness","rejection_reason","formula_version",
                     "status","ledger_path","genome_json","error")},
                 "fitness_accepted": int(bool(row.get("fitness_accepted"))),

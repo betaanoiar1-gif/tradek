@@ -37,14 +37,20 @@ class EvolutionReport:
     best: Optional[Candidate]
     archive: list[dict] = field(default_factory=list)
     diversity: list[float] = field(default_factory=list)
+    all_rejected: bool = False
+    rejection_summary: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
             "generations": self.generations,
             "evaluated": self.evaluated,
+            # `best` is None when NO candidate passed the fitness gates. A rejected
+            # candidate is never reported as a winner.
             "best_genome_id": self.best.genome.genome_id if self.best else None,
             "best_fitness": self.best.fitness if self.best else None,
             "best_experiment_id": self.best.train.experiment_id if self.best else None,
+            "all_rejected": self.all_rejected,
+            "rejection_summary": self.rejection_summary,
             "diversity": self.diversity,
             "archive_size": len(self.archive),
         }
@@ -145,9 +151,13 @@ def evolve(
         population = children[:psize]
 
     ranked = sorted(archive.values(), key=lambda c: (-c.fitness, c.genome.genome_hash()))
-    best = ranked[0] if ranked and ranked[0].train.fitness_accepted else (
-        ranked[0] if ranked else None
-    )
+    accepted = [c for c in ranked if c.train.fitness_accepted]
+    best = accepted[0] if accepted else None
+    rejection_summary: dict[str, int] = {}
+    for c in ranked:
+        if not c.train.fitness_accepted:
+            key = c.train.rejection_reason or c.train.status
+            rejection_summary[key] = rejection_summary.get(key, 0) + 1
     if best is not None and observer_validation:
         # Validation is observer-only: it can never change selection above.
         val = run_experiment(
@@ -163,6 +173,8 @@ def evolve(
                   "experiment_id": c.train.experiment_id,
                   "status": c.train.status} for c in ranked],
         diversity=diversity,
+        all_rejected=best is None and bool(ranked),
+        rejection_summary=rejection_summary,
     )
 
 

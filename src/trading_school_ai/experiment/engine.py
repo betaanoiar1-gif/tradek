@@ -44,6 +44,7 @@ class ExperimentResult:
     genome_id: str
     feature_hash: str
     dataset_hash: Optional[str]
+    dataset_source: Optional[str]
     config_hash: str
     code_version: str
     git_commit: Optional[str]
@@ -113,7 +114,8 @@ def run_experiment(
             experiment_id=eid, counter=counter, seed=seed, split=split,
             genome_hash=ghash, genome_id=genome.genome_id,
             feature_hash=genome.feature_hash(), dataset_hash=dataset.sha256,
-            config_hash=chash, code_version=CODE_VERSION,
+            dataset_source=dataset.source_path, config_hash=chash,
+            code_version=CODE_VERSION,
             git_commit=commit if commit is not None else git_commit(),
             metrics={}, fitness=float("-inf"), fitness_accepted=False,
             rejection_reason="EXPERIMENT_ERROR", formula_version=settings.fitness.formula_version,
@@ -131,7 +133,8 @@ def run_experiment(
         experiment_id=eid, counter=counter, seed=seed, split=split,
         genome_hash=ghash, genome_id=genome.genome_id,
         feature_hash=genome.feature_hash(), dataset_hash=dataset.sha256,
-        config_hash=chash, code_version=CODE_VERSION,
+        dataset_source=dataset.source_path, config_hash=chash,
+        code_version=CODE_VERSION,
         git_commit=commit if commit is not None else git_commit(),
         metrics=metrics.to_dict(), fitness=fitness.score,
         fitness_accepted=fitness.accepted, rejection_reason=fitness.rejection_reason,

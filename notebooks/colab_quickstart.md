@@ -3,7 +3,7 @@
 ## Cell 1 — bootstrap (install, mount Drive, validate, init local runtime)
 
 ```python
-!pip install -q "git+https://github.com/<you>/trading-school-ai.git"
+!pip install -q "git+https://github.com/betaanoiar1-gif/tradek.git@arena/01a0e49f-tradek"
 
 from trading_school_ai.colab import bootstrap
 
@@ -30,11 +30,14 @@ Nothing is downloaded or synthesized to replace a missing dataset.
 ## Cell 2 — run doctor + an AI_OFF learning cycle
 
 ```python
-%env TSA_RUNTIME_DIR=/content/tsa_runtime
-!tsa doctor
-!tsa learn --ai-off
-!tsa report --markdown
-!tsa sync          # checksum-verified backup of the local runtime to Drive
+# `pip install` ships the package, not the repository's YAML files.
+# Generate a real config first (AI_OFF and paper execution by default):
+!tsa init-config -o /content/tsa.yaml --runtime /content/tsa_runtime
+
+!tsa doctor          -c /content/tsa.yaml
+!tsa learn --ai-off  -c /content/tsa.yaml
+!tsa report --markdown -c /content/tsa.yaml
+!tsa sync            -c /content/tsa.yaml   # checksum-verified backup to Drive
 ```
 
 `pip install` targets only this package and its declared dependencies; it does not

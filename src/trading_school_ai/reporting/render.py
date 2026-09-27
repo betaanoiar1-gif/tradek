@@ -35,6 +35,7 @@ def experiment_report(memory: Memory, experiment_id: str) -> dict:
         "rejection_reason": row["rejection_reason"],
         "formula_version": row["formula_version"],
         "dataset_hash": row["dataset_hash"],
+        "dataset_source": row["dataset_source"],
         "config_hash": row["config_hash"],
         "code_version": row["code_version"],
         "git_commit": row["git_commit"],

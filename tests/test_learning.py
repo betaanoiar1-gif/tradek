@@ -111,3 +111,65 @@ def test_reproduce_command_matches(synthetic_dataset, simple_genome, settings, t
     mem.record_experiment(res)
     rep = reproduce(mem, res.experiment_id, synthetic_dataset, settings)
     assert rep.ok and rep.identical_id and rep.mismatches == {}
+
+
+def test_experiment_records_dataset_provenance(synthetic_dataset, simple_genome,
+                                               settings, tmp_path):
+    """Every experiment records WHICH dataset produced it, so synthetic and real
+    results can never be silently mixed in the same memory database."""
+    from trading_school_ai.data.dataset import CanonicalDataset
+    tagged = CanonicalDataset(synthetic_dataset.frame, synthetic_dataset.gaps,
+                              "deadbeef", "/tmp/labelled-synthetic.parquet")
+    mem = Memory(tmp_path / "m.sqlite")
+    res = run_experiment(tagged, simple_genome, settings, counter=0)
+    mem.record_experiment(res)
+    row = mem.get_experiment(res.experiment_id)
+    assert row["dataset_hash"] == "deadbeef"
+    assert row["dataset_source"] == "/tmp/labelled-synthetic.parquet"
+
+
+def test_memory_migrates_old_schema_without_data_loss(tmp_path):
+    """A v1 database must keep working (additive migration only)."""
+    import sqlite3
+    path = tmp_path / "old.sqlite"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """CREATE TABLE experiments (
+             experiment_id TEXT PRIMARY KEY, counter INTEGER NOT NULL,
+             seed INTEGER NOT NULL, split TEXT NOT NULL, genome_hash TEXT NOT NULL,
+             genome_id TEXT NOT NULL, feature_hash TEXT NOT NULL, dataset_hash TEXT,
+             config_hash TEXT NOT NULL, code_version TEXT NOT NULL, git_commit TEXT,
+             fitness REAL NOT NULL, fitness_accepted INTEGER NOT NULL,
+             rejection_reason TEXT, formula_version TEXT, status TEXT NOT NULL,
+             ledger_path TEXT, genome_json TEXT NOT NULL, metrics_json TEXT NOT NULL,
+             error TEXT);""")
+    conn.execute("INSERT INTO experiments VALUES ('old1',0,1,'train','g','gi','fh',"
+                 "'dh','ch','1.0.0',NULL,1.0,1,'','fitness-v1','OK',NULL,'{}','{}','')")
+    conn.commit()
+    conn.close()
+    mem = Memory(path)
+    assert mem.get_experiment("old1")["fitness"] == 1.0
+    assert "dataset_source" in mem.get_experiment("old1")
+
+
+def test_no_winner_is_claimed_when_all_candidates_are_rejected(
+        synthetic_dataset, settings, tmp_path):
+    """If every candidate fails the fitness gates, `best` must be None."""
+    settings.fitness.min_trades = 10 ** 9  # nothing can pass
+    rep = evolve(synthetic_dataset, settings, Memory(tmp_path / "m.sqlite"))
+    assert rep.best is None
+    d = rep.to_dict()
+    assert d["all_rejected"] is True
+    assert d["best_genome_id"] is None and d["best_experiment_id"] is None
+    assert sum(d["rejection_summary"].values()) == len(rep.archive)
+
+
+def test_best_is_always_an_accepted_candidate(synthetic_dataset, settings, tmp_path):
+    settings.fitness.min_trades = 1
+    rep = evolve(synthetic_dataset, settings, Memory(tmp_path / "m.sqlite"))
+    if rep.best is not None:
+        assert rep.best.train.fitness_accepted is True
+        assert rep.best.fitness == max(
+            a["fitness"] for a in rep.archive
+            if a["experiment_id"] == rep.best.train.experiment_id)
+        assert rep.to_dict()["all_rejected"] is False

@@ -82,3 +82,44 @@ def _cfg():
 def _scfg():
     from trading_school_ai.config.settings import StrategyConfig
     return StrategyConfig()
+
+
+def test_stale_signal_is_not_executed_after_a_gap(gapped_dataset):
+    """A signal produced on the last bar before a gap must be DROPPED.
+
+    The rule is: execution happens at the open of the first 1m bar strictly
+    after decision_timestamp. If that exact bar is missing, there is no valid
+    execution candle, so the intent expires. It is never carried across the gap
+    and filled at the first bar after the gap (that would be a stale fill).
+    """
+    g = _always_long()
+    idx = gapped_dataset.frame.index
+    gap_start = gapped_dataset.gaps.frame["gap_start"].iloc[0]
+    gap_end = gapped_dataset.gaps.frame["gap_end"].iloc[0]
+    last_before = idx[idx < gap_start][-1]
+    first_after = idx[idx >= gap_end][0]
+
+    sig = generate_signals(gapped_dataset, g).frame
+    assert bool(sig.loc[last_before, "entry_long"])  # a signal really exists there
+
+    res = run_backtest(gapped_dataset, g, _cfg(), _scfg())
+    entries = {t.entry_time for t in res.trades}
+    # the first bar after the gap must not be a fill of the pre-gap signal
+    for t in res.trades:
+        if t.entry_time == first_after:
+            # only admissible if its own signal bar is the bar right before it,
+            # which cannot exist across a gap -> so this must never happen
+            raise AssertionError("stale pre-gap signal was executed after the gap")
+    assert last_before not in entries
+
+
+def test_execution_index_requires_the_true_next_minute(gapped_dataset):
+    """Engine-level check of the contiguity requirement."""
+    from trading_school_ai.backtest.engine import _minute_step
+
+    idx = gapped_dataset.frame.index
+    step = _minute_step(idx)
+    ts = idx.asi8
+    gap_start = gapped_dataset.gaps.frame["gap_start"].iloc[0]
+    i = int(np.flatnonzero(idx == idx[idx < gap_start][-1])[0])
+    assert ts[i + 1] - ts[i] > step  # the next stored bar is NOT the next minute

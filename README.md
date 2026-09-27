@@ -53,12 +53,15 @@ trading-school-ai/
 ## Setup
 
 ```bash
-git clone <this repo> && cd trading-school-ai
+git clone https://github.com/betaanoiar1-gif/tradek.git
+cd tradek
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"          # add ",ai" for the optional LLM adapter
+pip install -e ".[dev]"          # use ".[dev,ai]" for the optional LLM adapter
 pytest -q                        # run the suite
 lint-imports                     # verify architecture contracts
 ```
+
+Verified on Python 3.11 with both pandas 2.x and pandas 3.0 / numpy 2.4.
 
 ## Dataset contract
 
@@ -79,17 +82,21 @@ mismatch is reported as a warning by default and becomes fatal with
 **Cell 1 — bootstrap**
 
 ```python
-!pip install -q "git+https://github.com/<you>/trading-school-ai.git"
+!pip install -q "git+https://github.com/betaanoiar1-gif/tradek.git@arena/01a0e49f-tradek"
+
 from trading_school_ai.colab import bootstrap
 info = bootstrap(runtime_dir="/content/tsa_runtime")   # mounts Drive, creates local dirs, runs doctor
-info["doctor_ok"], info["db_path"], info["canonical_path"]
+print(info["drive_mounted"], info["db_path"], info["canonical_path"], info["doctor_ok"])
 ```
 
 **Cell 2 — run**
 
 ```python
-!tsa doctor -c /content/configs/default.yaml
-!tsa learn --ai-off -c /content/configs/default.yaml
+# pip installs the package, not the repo's YAML files -> generate a config:
+!tsa init-config -o /content/tsa.yaml --runtime /content/tsa_runtime
+!tsa doctor       -c /content/tsa.yaml
+!tsa learn --ai-off -c /content/tsa.yaml
+!tsa report --markdown -c /content/tsa.yaml
 ```
 
 SQLite and all active runtime writes stay on the local Colab filesystem
@@ -99,6 +106,7 @@ SQLite and all active runtime writes stay on the local Colab filesystem
 
 ```bash
 tsa version
+tsa init-config -o tsa.yaml --canonical /path/BTCUSDT-1m-canonical.parquet
 tsa doctor -c configs/default.yaml
 tsa data validate -c configs/default.yaml
 tsa backtest -g genome.json -c configs/default.yaml
@@ -180,5 +188,21 @@ config hash are persisted with every experiment.
 * MTF features are available via `mtf.align_to_base` but the v1.0 Genome expresses
   conditions on 1m features only.
 * Fees/slippage defaults (0.1% / 1bp) are fallback assumptions, not venue-verified.
+
+## Verifying against the REAL dataset
+
+The four tests in `tests/test_integration_real_data.py` skip when the canonical
+dataset is absent. To make absence a hard failure (so a green CI run can never be
+mistaken for real-data verification):
+
+```bash
+TSA_REQUIRE_REAL_DATA=1 \
+TSA_CANONICAL_PATH=/path/BTCUSDT-1m-canonical.parquet \
+TSA_GAPS_PATH=/path/BTCUSDT-1m-missing-gaps.parquet \
+pytest tests/test_integration_real_data.py -q
+```
+
+Every experiment row stores both `dataset_hash` and `dataset_source`, so synthetic
+and real results can never be silently mixed inside one memory database.
 
 See `VALIDATION_REPORT.md` for the executed test results and reproducibility evidence.

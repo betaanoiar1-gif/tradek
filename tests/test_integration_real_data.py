@@ -25,11 +25,27 @@ REASON = (
     "Set TSA_CANONICAL_PATH (and TSA_GAPS_PATH) to run real-data integration "
     "tests. No substitute or synthetic data is used here."
 )
-real_data = pytest.mark.skipif(not CANONICAL.exists(), reason=REASON)
+AVAILABLE = CANONICAL.exists()
+# Guard against a CI run being presented as "real data verified" when the
+# dataset was simply absent: TSA_REQUIRE_REAL_DATA=1 turns the skips into
+# hard failures.
+REQUIRE_REAL = os.environ.get("TSA_REQUIRE_REAL_DATA") == "1"
+
+
+def _gate():
+    if AVAILABLE:
+        return
+    if REQUIRE_REAL:
+        pytest.fail("TSA_REQUIRE_REAL_DATA=1 but " + REASON)
+    pytest.skip(REASON)
+
+
+real_data = pytest.mark.skipif(AVAILABLE is False and not REQUIRE_REAL, reason=REASON)
 
 
 @real_data
 def test_real_dataset_contract():
+    _gate()
     report = validate_dataset(SETTINGS.data)
     assert report.ok, report.errors
     assert report.rows > 0
@@ -38,6 +54,7 @@ def test_real_dataset_contract():
 
 @real_data
 def test_real_dataset_hash_matches_contract():
+    _gate()
     report = validate_dataset(SETTINGS.data)
     assert report.sha256 == CANONICAL_DATASET_SHA256, (
         "Dataset hash does not match the documented contract hash; "
@@ -47,6 +64,7 @@ def test_real_dataset_hash_matches_contract():
 
 @real_data
 def test_real_dataset_backtest_and_metrics():
+    _gate()
     from trading_school_ai.backtest.engine import run_backtest
     from trading_school_ai.metrics.core import compute_metrics
     from trading_school_ai.strategies.genome import Condition, FeatureRef, Genome
@@ -68,6 +86,7 @@ def test_real_dataset_backtest_and_metrics():
 
 @real_data
 def test_real_dataset_walkforward():
+    _gate()
     from trading_school_ai.strategies.genome import Condition, FeatureRef, Genome
     from trading_school_ai.walkforward.engine import walk_forward
 
@@ -79,3 +98,16 @@ def test_real_dataset_walkforward():
     assert len(folds) >= 1
     for f in folds:
         assert f.train_end < f.test_start
+
+
+def test_real_data_availability_is_reported_honestly():
+    """Always runs. Documents precisely what is missing and how to supply it."""
+    if AVAILABLE:
+        report = validate_dataset(SETTINGS.data)
+        assert report.rows > 0
+        assert report.sha256 is not None
+    else:
+        assert not CANONICAL.exists()
+        assert "TSA_CANONICAL_PATH" in REASON
+        # and nothing synthetic is standing in for it
+        assert SETTINGS.data.canonical_path.endswith(".parquet")

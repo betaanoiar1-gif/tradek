@@ -25,7 +25,7 @@ def _config(tmp_path, data_path):
     cfg.write_text(
         f"data:\n  canonical_path: {data_path}\n  gaps_path: {tmp_path/'gaps.parquet'}\n"
         f"  expected_sha256: null\n  enforce_hash: false\n"
-        f"fitness:\n  min_trades: 1\n"
+        f"fitness:\n  min_trades: 1\n  min_profit_factor: 0.0\n"
         f"evolution:\n  population_size: 4\n  generations: 1\n"
         f"storage:\n  runtime_dir: {tmp_path/'runtime'}\n"
         f"  drive_backup_dir: {tmp_path/'backup'}\n"
@@ -111,3 +111,30 @@ def test_sync_lock(tmp_path):
 def test_sync_reports_missing_source(tmp_path):
     with pytest.raises(SyncError):
         sync_to_drive(tmp_path / "nope", tmp_path / "drive")
+
+
+def test_init_config_creates_usable_config(tmp_path):
+    data = _write_dataset(tmp_path)
+    out = tmp_path / "gen.yaml"
+    r = runner.invoke(app, ["init-config", "-o", str(out), "--canonical", str(data),
+                            "--gaps", str(tmp_path / "g.parquet"),
+                            "--runtime", str(tmp_path / "rt")])
+    assert r.exit_code == 0, r.stdout
+    payload = json.loads(r.stdout)
+    assert payload["dataset_present"] is True
+    # the generated config must actually drive the CLI
+    d = runner.invoke(app, ["data", "validate", "-c", str(out)])
+    assert d.exit_code == 0 and json.loads(d.stdout)["rows"] == 4000
+    # and it must not enable AI or live trading
+    text = out.read_text()
+    assert "enabled: false" in text and "live_enabled: false" in text
+    assert runner.invoke(app, ["init-config", "-o", str(out)]).exit_code == 2
+
+
+def test_report_exposes_dataset_provenance(tmp_path):
+    cfg = _config(tmp_path, _write_dataset(tmp_path))
+    learn = runner.invoke(app, ["learn", "--ai-off", "-c", str(cfg)])
+    eid = json.loads(learn.stdout)["best_experiment_id"]
+    rep = json.loads(runner.invoke(app, ["report", "-e", eid, "-c", str(cfg)]).stdout)
+    assert rep["dataset_source"].endswith("canon.parquet")
+    assert rep["dataset_hash"]

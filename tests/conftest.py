@@ -46,7 +46,10 @@ def gapped_dataset():
 def settings(tmp_path):
     s = Settings()
     s.storage.runtime_dir = str(tmp_path / "runtime")
+    # Permissive gates for unit tests so that an ACCEPTED candidate exists.
+    # Gate behaviour itself is tested explicitly in test_metrics_fitness.py.
     s.fitness.min_trades = 1
+    s.fitness.min_profit_factor = 0.0
     s.evolution.population_size = 6
     s.evolution.generations = 2
     s.montecarlo.runs = 8

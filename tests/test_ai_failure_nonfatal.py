@@ -25,7 +25,7 @@ def test_learn_with_ai_still_completes_without_credentials(tmp_path, monkeypatch
     cfg = tmp_path / "cfg.yaml"
     cfg.write_text(
         f"data:\n  canonical_path: {data}\n  gaps_path: {tmp_path/'g.parquet'}\n"
-        f"  expected_sha256: null\nfitness:\n  min_trades: 1\n"
+        f"  expected_sha256: null\nfitness:\n  min_trades: 1\n  min_profit_factor: 0.0\n"
         f"evolution:\n  population_size: 4\n  generations: 1\n"
         f"storage:\n  runtime_dir: {tmp_path/'rt'}\n  drive_backup_dir: {tmp_path/'bk'}\n")
     r = runner.invoke(app, ["learn", "--with-ai", "-c", str(cfg)])
