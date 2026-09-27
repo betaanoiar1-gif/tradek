@@ -1,0 +1,45 @@
+# Trading School AI - default configuration
+data:
+  symbol: BTCUSDT
+  market: spot
+  base_timeframe: 1m
+  canonical_path: /content/drive/MyDrive/TradingSchoolAI/datasets/canonical/spot/BTCUSDT/1m/BTCUSDT-1m-canonical.parquet
+  gaps_path: /content/drive/MyDrive/TradingSchoolAI/datasets/canonical/spot/BTCUSDT/1m/BTCUSDT-1m-missing-gaps.parquet
+  expected_sha256: cb8cbeedc1ae34b68078e5fb02126f92aab8d064d33fa19b0159acb666ed8c1f
+  enforce_hash: false
+
+backtest:
+  fee_rate: 0.001        # FALLBACK ASSUMPTION - verify against your venue
+  slippage_bps: 1.0      # FALLBACK ASSUMPTION - verify against your venue
+  initial_equity: 10000.0
+  allow_short: true
+  allow_overlapping_positions: false
+  gap_exit: last_valid_close
+
+strategy:
+  strategy_max_holding_bars: 1440   # documented v1.0 default
+
+split:
+  train_frac: 0.6
+  validation_frac: 0.2
+  embargo_bars: 60
+
+evolution:
+  population_size: 24
+  generations: 5
+  master_seed: 20240101
+  workers: 1
+
+ai:
+  enabled: false          # AI_OFF by default
+  provider: "null"
+  api_key_env: TSA_LLM_API_KEY
+
+execution:
+  mode: paper
+  live_enabled: false
+  exchange: paper
+
+storage:
+  runtime_dir: ./runtime
+  drive_backup_dir: /content/drive/MyDrive/TradingSchoolAI/backups

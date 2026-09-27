@@ -1,0 +1,275 @@
+"""tsa - Trading School AI command line interface."""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from typing import Optional
+
+import typer
+
+from .. import CODE_VERSION
+from ..config.settings import Settings, load_settings
+from ..data.dataset import load_canonical, validate_dataset
+from ..data.errors import DataError
+from ..observability.doctor import run_doctor
+from ..observability.logging import get_logger
+from ..storage.paths import RuntimePaths
+
+app = typer.Typer(add_completion=False, help="Trading School AI: Python learns, the LLM teaches, statistics judge.")
+data_app = typer.Typer(help="Canonical dataset commands")
+app.add_typer(data_app, name="data")
+
+log = get_logger("tsa.cli")
+
+
+def _settings(config: Optional[str]) -> Settings:
+    return load_settings(config)
+
+
+def _echo_json(payload) -> None:
+    typer.echo(json.dumps(payload, indent=2, default=str))
+
+
+def _load(settings: Settings):
+    try:
+        return load_canonical(settings.data)
+    except DataError as exc:
+        typer.secho(f"DATA UNAVAILABLE: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+
+
+@app.command()
+def version():
+    """Print the code version and config hash."""
+    s = Settings()
+    _echo_json({"code_version": CODE_VERSION, "default_config_hash": s.config_hash()})
+
+
+@app.command()
+def doctor(config: Optional[str] = typer.Option(None, "--config", "-c")):
+    """Validate environment, dependencies, dataset, paths and safety locks."""
+    s = _settings(config)
+    report = run_doctor(s)
+    _echo_json(report)
+    raise typer.Exit(code=0 if report["ok"] else 1)
+
+
+@data_app.command("validate")
+def data_validate(config: Optional[str] = typer.Option(None, "--config", "-c")):
+    """Validate the canonical dataset contract (schema, UTC, hash, gaps)."""
+    s = _settings(config)
+    report = validate_dataset(s.data)
+    _echo_json(report.to_dict())
+    raise typer.Exit(code=0 if report.ok else 2)
+
+
+@app.command()
+def backtest(
+    genome: str = typer.Option(..., "--genome", "-g", help="Path to a genome JSON file"),
+    split: str = typer.Option("train", "--split"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+    save: bool = typer.Option(True, "--save/--no-save", help="Persist to memory"),
+):
+    """Run one real backtest of a genome and persist the experiment."""
+    from ..experiment.engine import run_experiment
+    from ..memory.db import Memory
+    from ..strategies.genome import Genome
+
+    s = _settings(config)
+    ds = _load(s)
+    g = Genome.from_json(Path(genome).read_text())
+    paths = RuntimePaths.build(s)
+    mem = Memory(s.db_path)
+    res = run_experiment(ds, g, s, counter=mem.next_counter(), split=split,
+                         ledger_dir=str(paths.ledgers))
+    if save:
+        mem.record_experiment(res)
+    _echo_json({"experiment_id": res.experiment_id, "status": res.status,
+                "fitness": res.fitness, "rejection_reason": res.rejection_reason,
+                "metrics": res.metrics, "ledger_path": res.ledger_path})
+
+
+@app.command()
+def learn(
+    ai_off: bool = typer.Option(True, "--ai-off/--with-ai", help="AI_OFF is the default"),
+    generations: Optional[int] = typer.Option(None, "--generations"),
+    population: Optional[int] = typer.Option(None, "--population"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+):
+    """Run an evolutionary learning cycle. Works fully without any API key."""
+    from ..learning.evolution import evolve
+    from ..memory.db import Memory
+
+    s = _settings(config)
+    if not ai_off:
+        s.ai.enabled = True
+        if s.ai.provider == "null":
+            s.ai.provider = "openai_compatible"
+    ds = _load(s)
+    RuntimePaths.build(s)
+    mem = Memory(s.db_path)
+    report = evolve(ds, s, mem, generations=generations, population_size=population)
+    out = report.to_dict()
+    out["ai_mode"] = "AI_OFF" if ai_off else "AI_ON"
+    if not ai_off:
+        from ..ai.summaries import dataset_summary, failure_summary
+        from ..ai.teacher import Teacher
+        from ..research.queue import evaluate_hypothesis
+
+        paths = RuntimePaths.build(s)
+        teacher = Teacher(s.ai, cache_dir=paths.cache)
+        summary = {"dataset": dataset_summary(ds),
+                   "failures": failure_summary(mem.failures()),
+                   "best_fitness": out.get("best_fitness")}
+        hyp = teacher.propose(summary)
+        if hyp is None:
+            out["teacher"] = {"proposed": False, "reason": teacher.status().last_error,
+                              "note": "Python-only learning already completed above."}
+        else:
+            outcome = evaluate_hypothesis(hyp, ds, s, mem, source="ai")
+            out["teacher"] = {"proposed": True, "verdict": outcome.verdict,
+                              "hypothesis_id": outcome.hypothesis_id}
+    _echo_json(out)
+
+
+@app.command()
+def walkforward(
+    genome: str = typer.Option(..., "--genome", "-g"),
+    folds: int = typer.Option(4, "--folds"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+):
+    """Purged walk-forward evaluation of a genome."""
+    from ..strategies.genome import Genome
+    from ..walkforward.engine import walk_forward
+
+    s = _settings(config)
+    ds = _load(s)
+    g = Genome.from_json(Path(genome).read_text())
+    folds_out = walk_forward(ds, g, s, folds=folds)
+    _echo_json([f.__dict__ for f in folds_out])
+
+
+@app.command()
+def robustness(
+    experiment_id: str = typer.Option(..., "--experiment-id", "-e"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+):
+    """Monte Carlo + stress overlays for a stored experiment (report only)."""
+    from ..memory.db import Memory
+    from ..montecarlo.runner import run_monte_carlo
+    from ..strategies.genome import Genome
+    from ..stress.overlays import run_stress
+
+    s = _settings(config)
+    ds = _load(s)
+    mem = Memory(s.db_path)
+    row = mem.get_experiment(experiment_id)
+    if row is None:
+        typer.secho(f"Unknown experiment {experiment_id}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+    g = Genome.from_json(row["genome_json"])
+    mc = run_monte_carlo(ds, g, s, base_seed=int(row["seed"]))
+    st = run_stress(ds, g, s, base_seed=int(row["seed"]))
+    mem.record_robustness(experiment_id, "montecarlo", mc.to_dict())
+    mem.record_robustness(experiment_id, "stress", st.to_dict())
+    _echo_json({"montecarlo": {k: v for k, v in mc.to_dict().items()
+                               if k not in ("returns", "profit_factors", "max_drawdowns")},
+                "stress_scenarios": len(st.scenarios)})
+
+
+@app.command()
+def report(
+    experiment_id: Optional[str] = typer.Option(None, "--experiment-id", "-e"),
+    limit: int = typer.Option(10, "--limit"),
+    markdown: bool = typer.Option(False, "--markdown"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+):
+    """Render persisted results. Never recomputes experiments."""
+    from ..memory.db import Memory
+    from ..reporting.render import ReportError, experiment_report, leaderboard, render_markdown
+
+    s = _settings(config)
+    mem = Memory(s.db_path)
+    if experiment_id:
+        try:
+            _echo_json(experiment_report(mem, experiment_id))
+        except ReportError as exc:
+            typer.secho(str(exc), fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=2)
+        return
+    if markdown:
+        text = render_markdown(mem, limit=limit)
+        out = RuntimePaths.build(s).reports / "report.md"
+        out.write_text(text)
+        typer.echo(text)
+        typer.echo(f"\nWritten to {out}")
+    else:
+        _echo_json(leaderboard(mem, limit=limit))
+
+
+@app.command()
+def memory(
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+    top: int = typer.Option(5, "--top"),
+):
+    """Inspect the experience memory database."""
+    from ..memory.db import Memory
+    from ..reporting.render import leaderboard
+
+    s = _settings(config)
+    mem = Memory(s.db_path)
+    payload = mem.summary()
+    payload["top"] = leaderboard(mem, limit=top)
+    _echo_json(payload)
+
+
+@app.command()
+def sync(
+    restore: bool = typer.Option(False, "--restore", help="Restore FROM Drive"),
+    overwrite: bool = typer.Option(False, "--overwrite"),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+):
+    """Back up runtime artifacts to Drive (or restore) with checksum verification."""
+    from ..drive.sync import SyncError, restore_from_drive, sync_to_drive
+
+    s = _settings(config)
+    paths = RuntimePaths.build(s)
+    try:
+        if restore:
+            res = restore_from_drive(s.storage.drive_backup_dir, paths.root, overwrite)
+        else:
+            res = sync_to_drive(paths.root, s.storage.drive_backup_dir, overwrite)
+    except SyncError as exc:
+        typer.secho(f"SYNC FAILED: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+    _echo_json(res.to_dict())
+
+
+@app.command()
+def reproduce(
+    experiment_id: str = typer.Argument(...),
+    config: Optional[str] = typer.Option(None, "--config", "-c"),
+):
+    """Rerun a stored experiment and compare outputs within tolerance."""
+    from ..experiment.reproduce import reproduce as do_reproduce
+    from ..memory.db import Memory
+
+    s = _settings(config)
+    ds = _load(s)
+    mem = Memory(s.db_path)
+    try:
+        rep = do_reproduce(mem, experiment_id, ds, s)
+    except KeyError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+    _echo_json(rep.to_dict())
+    raise typer.Exit(code=0 if rep.ok else 1)
+
+
+def main() -> None:  # pragma: no cover
+    app()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    main()

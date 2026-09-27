@@ -1,0 +1,10 @@
+# Local/offline config. The dataset path MUST be supplied explicitly:
+#   TSA_CANONICAL_PATH=/path/to/your.parquet tsa doctor -c configs/local-synthetic.yaml
+# No data is ever downloaded or synthesized to fill a missing dataset.
+data:
+  canonical_path: ./data/BTCUSDT-1m-canonical.parquet
+  gaps_path: ./data/BTCUSDT-1m-missing-gaps.parquet
+  enforce_hash: false
+storage:
+  runtime_dir: ./runtime
+  drive_backup_dir: ./runtime/backups
